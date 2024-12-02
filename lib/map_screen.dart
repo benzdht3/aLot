@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'marker_data.dart';
+
+
+const String apiKey = 'api-key';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -23,9 +27,12 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _mylocation;
   LatLng? _draggedPosition;
   bool _isDragging = false;
+  bool _isRouting = false;
+  List<LatLng> _routePoints = [];
   TextEditingController _searchController = TextEditingController();
   List<dynamic> _searchResults = [];
   bool _isSearching = false;
+  
 
   Future<Position> _determinePosition() async{
     bool serviceEnabled;
@@ -74,36 +81,38 @@ class _MapScreenState extends State<MapScreen> {
           height: 80,
           child: GestureDetector(
             onTap: () => _showMarkerInfo(markerData),
-            child: Column(
-              children: [
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(4),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 4,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    title, 
-                    style: TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(4),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 4,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
                     ),
-                  )
-                ),
-                Icon(
-                  Icons.location_on,
-                  color: Colors.redAccent,
-                  size: 40,
-                ),
-              ],
-            ),
+                    child: Text(
+                      title, 
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
+                  ),
+                  Icon(
+                    Icons.location_on,
+                    color: Colors.redAccent,
+                    size: 40,
+                  ),
+                ],
+              ),
+            )
           )
         )
       );
@@ -200,6 +209,99 @@ class _MapScreenState extends State<MapScreen> {
       _isSearching = false;
       _searchController.clear();
     });
+
+    _addMarker(location, "Destination", "Search Result");
+    // _getParkingSpots(location);
+  }
+
+Future<List<LatLng>> _getRoute(LatLng start, LatLng end) async {
+  final String url =
+      'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$apiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
+
+  final response = await http.get(Uri.parse(url));
+
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    final List<dynamic> geometry = data['features'][0]['geometry']['coordinates'];
+
+    // Decode geometry into a list of LatLng
+    return geometry
+        .map((coord) => LatLng(coord[1], coord[0]))
+        .toList();
+  } else {
+    throw Exception('Failed to fetch route');
+  }
+}
+
+Future<List<MarkerData>> _getParkingSpots(LatLng location) async {
+  final double radius = 1000; // Search within 1000 meters
+  final url =
+      'https://api.openrouteservice.org/v2/pois?api_key=$apiKey';
+
+  final body = json.encode({
+    "request": "pois",
+    "geometry": {
+      "geojson": {
+        "type": "Point",
+        "coordinates": [location.longitude, location.latitude]
+      },
+      "buffer": radius
+    },
+    "filters": {
+      "category_ids": [806], // ORS category ID for parking areas
+    },
+  });
+
+  final response = await http.post(
+    Uri.parse(url),
+    headers: {'Content-Type': 'application/json'},
+    body: body,
+  );
+
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    final List<dynamic> features = data['features'];
+
+    // Convert POI data into a list of markers
+    return features.map<MarkerData>((feature) {
+      final coords = feature['geometry']['coordinates'];
+      return MarkerData(
+        position: LatLng(coords[1], coords[0]),
+        title: 'Parking Spot',
+        description: 'Parking spot near your destination',
+      );
+    }).toList();
+  } else {
+    throw Exception('Failed to fetch parking spots');
+  }
+}
+
+void _calculateRoute() async {
+    if (_mylocation == null || _selectedPosition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please select a destination')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isRouting = true;
+    });
+
+    try {
+      final route = await _getRoute(_mylocation!, _selectedPosition!);
+      setState(() {
+        _routePoints = route;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching route: $e')),
+      );
+    } finally {
+      setState(() {
+        _isRouting = false;
+      });
+    }
   }
 
   @override
@@ -231,6 +333,16 @@ class _MapScreenState extends State<MapScreen> {
                 urlTemplate: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
               ),
               MarkerLayer(markers: _markers),
+              if (_routePoints.isNotEmpty)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.blue,
+                      strokeWidth: 4.0,
+                    ),
+                  ],
+                ),
               if(_isDragging && _draggedPosition != null)
                 MarkerLayer(
                   markers: [
@@ -262,6 +374,16 @@ class _MapScreenState extends State<MapScreen> {
                   ],
                 ),
             ],
+          ),
+          Positioned(
+            bottom: 170,
+            right: 20,
+            child: FloatingActionButton(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+              onPressed: _calculateRoute,
+              child: Icon(Icons.directions),
+            ),
           ),
           // Search bar
           Positioned(
