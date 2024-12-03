@@ -32,7 +32,9 @@ class _MapScreenState extends State<MapScreen> {
   TextEditingController _searchController = TextEditingController();
   List<dynamic> _searchResults = [];
   bool _isSearching = false;
-  
+  double _alpha = 1.0;
+  double _beta = 1.0;
+  double _gamma = 1.0;
 
   Future<Position> _determinePosition() async{
     bool serviceEnabled;
@@ -84,27 +86,28 @@ class _MapScreenState extends State<MapScreen> {
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(4),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black26,
-                          blurRadius: 4,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Text(
-                      title, 
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.bold,
+                  if(title != '')
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(4),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
                       ),
-                    )
-                  ),
+                      child: Text(
+                        title, 
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      )
+                    ),
                   Icon(
                     Icons.location_on,
                     color: Colors.redAccent,
@@ -204,6 +207,7 @@ class _MapScreenState extends State<MapScreen> {
     LatLng location = LatLng(Lat, Lon);
     _mapController.move(location, 15.0);
     setState(() {
+      _markers.clear();
       _selectedPosition = location;
       _searchResults = [];
       _isSearching = false;
@@ -211,7 +215,7 @@ class _MapScreenState extends State<MapScreen> {
     });
 
     _addMarker(location, "Destination", "Search Result");
-    // _getParkingSpots(location);
+    _getParkingSpots(location);
   }
 
 Future<List<LatLng>> _getRoute(LatLng start, LatLng end) async {
@@ -233,10 +237,10 @@ Future<List<LatLng>> _getRoute(LatLng start, LatLng end) async {
   }
 }
 
-Future<List<MarkerData>> _getParkingSpots(LatLng location) async {
-  final double radius = 1000; // Search within 1000 meters
+Future<void> _getParkingSpots(LatLng location) async {
+  final double radius = 500; // Search within 1000 meters
   final url =
-      'https://api.openrouteservice.org/v2/pois?api_key=$apiKey';
+      'https://api.openrouteservice.org/pois?api_key=$apiKey';
 
   final body = json.encode({
     "request": "pois",
@@ -248,31 +252,151 @@ Future<List<MarkerData>> _getParkingSpots(LatLng location) async {
       "buffer": radius
     },
     "filters": {
-      "category_ids": [806], // ORS category ID for parking areas
+      "category_ids": [601], // ORS category ID for parking areas
     },
+  });
+
+  print('Request Body: $body');
+  print('Request URL: $url');
+
+
+  final response = await http.post(
+    Uri.parse(url),
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8', 
+      'Authorization': apiKey,
+      'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8'
+    },
+    body: body,
+  );
+
+  print('Response Code: ${response.statusCode}');
+  print('Response Body: ${response.body}');
+
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);  
+    final List<dynamic> features = data['features'];
+
+    double bestScore = double.infinity; // Start with a very high score for comparison
+    LatLng bestSpotLocation = location;
+    Map<String, dynamic> bestData = {
+      'time': '0',  // Convert to minutes
+      'distance': 0,
+    };;
+
+    // Iterate over features and add markers using your _addMarker function
+    for (var feature in features) {
+      final coords = feature['geometry']['coordinates'];
+      final properties = feature['properties'];
+      final categoryName = properties['category_ids']['601']['category_name'];
+      final parkingSpotLocation = LatLng(coords[1], coords[0]);
+
+      // Call function to calculate distances
+      final distanceFromUserLocation = await _getDistance(_mylocation!, parkingSpotLocation);
+      final distanceFromDestination = await _getDistance(location, parkingSpotLocation);
+
+      // Simulate parking availability probability (replace with dynamic values later)
+      final parkingAvailability = _getParkingAvailabilityProbability();
+
+      // Calculate the route score
+      final routeScore = _calculateRouteScore(
+        distanceFromUserLocation,
+        distanceFromDestination,
+        parkingAvailability,
+        _alpha,
+        _beta,
+        _gamma
+      );
+
+      // Check if this is the best parking spot (lowest score)
+      if (routeScore < bestScore) {
+        bestScore = routeScore;
+        bestSpotLocation = parkingSpotLocation;
+        bestData = { 'distanceFromUserLocation': distanceFromUserLocation, 'distanceFromDestination': distanceFromDestination};
+      }
+
+      // Call your _addMarker function for each feature
+      _addMarker(
+        parkingSpotLocation, // Marker location
+        '',
+        'Travel time: ${distanceFromUserLocation} meters\nDistance: ${distanceFromDestination} meters\nRoute Score: ${routeScore.toStringAsFixed(2)}',
+      );
+    }
+
+    _addMarker(
+      bestSpotLocation, // Marker location
+      'Best',
+      'Travel time: ${bestData['distanceFromUserLocation']} mins\nDistance: ${bestData['distanceFromDestination']} meters\nRoute Score: ${bestScore}',
+    );
+    _startRouteToParkingSpot(bestSpotLocation);
+  } else {
+    throw Exception('Failed to fetch parking spots');
+  }
+}
+
+double _getParkingAvailabilityProbability() {
+  // Simulate parking availability, this value should be dynamically calculated or retrieved from a real-time system
+  return 0.75;  // Example value (75% availability)
+}
+
+double _calculateRouteScore(double travelTime, double walkingDistance, double parkingAvailability, double alpha, double beta, double gamma) {
+  // Calculate the score based on the provided formula
+  return alpha * travelTime + beta * walkingDistance - gamma * parkingAvailability;
+}
+
+Future<dynamic> _getDistance(LatLng start, LatLng destination) async {
+  final String url = 'https://api.openrouteservice.org/v2/directions/foot-walking';
+  final body = json.encode({
+    "coordinates": [
+      [start.longitude, start.latitude],
+      [destination.longitude, destination.latitude]
+    ]
   });
 
   final response = await http.post(
     Uri.parse(url),
-    headers: {'Content-Type': 'application/json'},
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8', 
+      'Authorization': apiKey,
+      'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8'
+    },
     body: body,
   );
 
   if (response.statusCode == 200) {
-    final data = json.decode(response.body);
-    final List<dynamic> features = data['features'];
+    print('Response Code: ${response.statusCode}');
+    print('Response Body: ${response.body}');
 
-    // Convert POI data into a list of markers
-    return features.map<MarkerData>((feature) {
-      final coords = feature['geometry']['coordinates'];
-      return MarkerData(
-        position: LatLng(coords[1], coords[0]),
-        title: 'Parking Spot',
-        description: 'Parking spot near your destination',
-      );
-    }).toList();
+    final data = json.decode(response.body);
+    final route = data['routes'][0];  // Assume the first route is the one we want
+    
+    return route['segments'][0]['distance'];  // Distance in meters
   } else {
-    throw Exception('Failed to fetch parking spots');
+    throw Exception('Failed to fetch travel time and distance');
+  }
+}
+
+void _startRouteToParkingSpot(LatLng parkingSpotLocation) async {
+  if (_mylocation == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Please enable your location to get the route')),
+    );
+    return;
+  }
+
+  try {
+    // Fetch the route from the current location to the selected parking spot
+    final route = await _getRoute(_mylocation!, parkingSpotLocation);
+    setState(() {
+      _routePoints = route;
+    });
+
+    // Optionally, move the map view to show the route
+    _mapController.move(parkingSpotLocation, 15.0);
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Error fetching route: $e')),
+    );
   }
 }
 
@@ -324,6 +448,8 @@ void _calculateRoute() async {
               onTap: (tapPosition, LatLng) {
                 setState(() {
                   _selectedPosition = LatLng;
+                  _markers = [];
+                  _addMarker(LatLng, '', '');
                   _draggedPosition = _selectedPosition;
                 });
               },
@@ -343,6 +469,117 @@ void _calculateRoute() async {
                     ),
                   ],
                 ),
+              Positioned(
+                bottom: 20,
+                left: 20,
+                child: FloatingActionButton(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  onPressed: () {
+                    // Show modal when the button is pressed
+                    showModalBottomSheet(
+                      context: context,
+                      builder: (context) {
+                        return StatefulBuilder(
+                          builder: (context, setModalState) {
+                            return Padding(
+                              padding: const EdgeInsets.all(10.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Adjust Priority',
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                  Row(
+                                    children: [
+                                      Text('Distance from my location:'),
+                                      Expanded(
+                                        child: Slider(
+                                          value: _alpha,
+                                          min: 0,
+                                          max: 10,
+                                          divisions: 20,
+                                          label: _alpha.toStringAsFixed(1),
+                                          onChanged: (double value) {
+                                            setModalState(() {
+                                              _alpha = value;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Row(
+                                    children: [
+                                      Text('Distance from destination:'),
+                                      Expanded(
+                                        child: Slider(
+                                          value: _beta,
+                                          min: 0,
+                                          max: 10,
+                                          divisions: 20,
+                                          label: _beta.toStringAsFixed(1),
+                                          onChanged: (double value) {
+                                            setModalState(() {
+                                              _beta = value;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Row(
+                                    children: [
+                                      Text('Parking availability:'),
+                                      Expanded(
+                                        child: Slider(
+                                          value: _gamma,
+                                          min: 0,
+                                          max: 10,
+                                          divisions: 20,
+                                          label: _gamma.toStringAsFixed(1),
+                                          onChanged: (double value) {
+                                            setModalState(() {
+                                              _gamma = value;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      // When the button is pressed, recalculate the best parking spot
+                                      _markers.clear();
+                                      _routePoints.clear();
+                                      _addMarker(_selectedPosition!, 'Destination', "Search Result");
+                                      if (_selectedPosition != null) {
+                                        // Recalculate best parking spots using the selected position
+                                        _getParkingSpots(_selectedPosition!);
+                                      } else {
+                                        // If no position is selected, show a message or handle it accordingly
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text('Please select a location first!')),
+                                        );
+                                      }
+                                      
+                                      // Close the modal
+                                      Navigator.of(context).pop();
+                                    },
+                                    child: Text('Apply and recalculate'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                        );
+                      },
+                    );
+                  },
+                  child: Icon(Icons.settings),
+                ),
+              ),
               if(_isDragging && _draggedPosition != null)
                 MarkerLayer(
                   markers: [
@@ -376,13 +613,35 @@ void _calculateRoute() async {
             ],
           ),
           Positioned(
-            bottom: 170,
+            bottom: 90,
             right: 20,
             child: FloatingActionButton(
               backgroundColor: Colors.blue,
               foregroundColor: Colors.white,
               onPressed: _calculateRoute,
               child: Icon(Icons.directions),
+            ),
+          ),
+          Positioned(
+            bottom: 90,
+            left: 20,
+            child: FloatingActionButton(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              onPressed: () {
+                setState(() {
+                  _markers.clear();         // Clear all markers
+                  _markerData.clear();      // Clear marker data
+                  _routePoints.clear();     // Clear the route line
+                  _selectedPosition = null; // Reset selected position
+                  _draggedPosition = null;  // Reset dragged position
+                  _isDragging = false;      // Stop dragging mode
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Map cleared!')),
+                );
+              },
+              child: Icon(Icons.clear),
             ),
           ),
           // Search bar
@@ -449,33 +708,33 @@ void _calculateRoute() async {
             ),
           ),
           // location button
-          _isDragging == false ? Positioned(
-            bottom: 20,
-            left: 20,
-            child: FloatingActionButton(
-              backgroundColor: Colors.indigo,
-              foregroundColor: Colors.white,
-              onPressed: () {
-                setState(() {
-                  _isDragging = true;
-                });
-              },
-              child: Icon(Icons.add_location),
-            ),
-          ) : Positioned(
-            bottom: 20,
-            left: 20,
-            child: FloatingActionButton(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              onPressed: () {
-                setState(() {
-                  _isDragging = false;
-                });
-              },
-              child: Icon(Icons.wrong_location),
-            ),
-          ),
+          // _isDragging == false ? Positioned(
+          //   bottom: 20,
+          //   left: 20,
+          //   child: FloatingActionButton(
+          //     backgroundColor: Colors.indigo,
+          //     foregroundColor: Colors.white,
+          //     onPressed: () {
+          //       setState(() {
+          //         _isDragging = true;
+          //       });
+          //     },
+          //     child: Icon(Icons.add_location),
+          //   ),
+          // ) : Positioned(
+          //   bottom: 20,
+          //   left: 20,
+          //   child: FloatingActionButton(
+          //     backgroundColor: Colors.redAccent,
+          //     foregroundColor: Colors.white,
+          //     onPressed: () {
+          //       setState(() {
+          //         _isDragging = false;
+          //       });
+          //     },
+          //     child: Icon(Icons.wrong_location),
+          //   ),
+          // ),
           Positioned(
             bottom: 20,
             right: 20,
@@ -487,24 +746,24 @@ void _calculateRoute() async {
                   onPressed: _showCurrentLocation,
                   child: Icon(Icons.location_searching_rounded),
                 ),
-                if(!_isDragging)
-                  Padding(
-                    padding: EdgeInsets.only(top: 20),
-                    child: FloatingActionButton(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      onPressed: () {
-                        if(_draggedPosition != null) {
-                          _showMarkerDialog(context, _draggedPosition!);
-                        }
-                        setState(() {
-                          _isDragging = false;
-                          _draggedPosition = null;
-                        });
-                      },
-                      child: Icon(Icons.check),
-                    ),
-                  ),
+                // if(!_isDragging)
+                //   Padding(
+                //     padding: EdgeInsets.only(top: 20),
+                //     child: FloatingActionButton(
+                //       backgroundColor: Colors.green,
+                //       foregroundColor: Colors.white,
+                //       onPressed: () {
+                //         if(_draggedPosition != null) {
+                //           _showMarkerDialog(context, _draggedPosition!);
+                //         }
+                //         setState(() {
+                //           _isDragging = false;
+                //           _draggedPosition = null;
+                //         });
+                //       },
+                //       child: Icon(Icons.check),
+                //     ),
+                //   ),
               ],
             ),
           )
