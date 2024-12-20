@@ -364,7 +364,7 @@ Future<void> _calculateAndRouteToBestParkingSpot(List<Map> parkingSpots) async {
 
 
 Future<double> _getParkingAvailabilityProbability(String id, double minutes) async {
-  // return 1.0; use this when api is not running
+  // return 1.0; // use this when api is not running
   double result = 0.0; // Default fallback value
   double num_predictions = minutes / 300;
   int final_predict = num_predictions.ceil();
@@ -390,7 +390,7 @@ Future<double> _getParkingAvailabilityProbability(String id, double minutes) asy
   }
 }
 
-double _calculateRouteScore(double travelTime, double walkingDistance, double parkingFee, double trafficDensity, double parkingAvailability, double alpha, double beta, double gamma, double delta, double epsilon) {
+double _calculateRouteScore(double travelTime, double walkingDistance, double parkingFee, int trafficDensity, double parkingAvailability, double alpha, double beta, double gamma, double delta, double epsilon) {
   // Calculate the score based on the provided formula
   return alpha * travelTime + beta * walkingDistance * 10 + gamma * parkingFee * 100 + delta * trafficDensity * 100 - epsilon * parkingAvailability * 1000 ;
 }
