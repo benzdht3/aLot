@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -9,7 +10,7 @@ import 'package:http/http.dart' as http;
 import 'marker_data.dart';
 
 
-const String apiKey = 'api-key';
+const String apiKey = 'api_key';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -35,6 +36,12 @@ class _MapScreenState extends State<MapScreen> {
   double _alpha = 1.0;
   double _beta = 1.0;
   double _gamma = 1.0;
+  double _delta = 1.0;
+  double _epsilon = 1.0;
+  int _spot_id = 1;
+  List<Map> _parkingSpots = [];
+  String _destinationName = '';
+  final Random random = Random();
 
   Future<Position> _determinePosition() async{
     bool serviceEnabled;
@@ -101,7 +108,7 @@ class _MapScreenState extends State<MapScreen> {
                         ],
                       ),
                       child: Text(
-                        title, 
+                        title,
                         style: TextStyle(
                           color: Colors.black,
                           fontWeight: FontWeight.bold,
@@ -120,46 +127,6 @@ class _MapScreenState extends State<MapScreen> {
         )
       );
     });
-  }
-  
-  void _showMarkerDialog(BuildContext context, LatLng position) {
-    final TextEditingController titleController = TextEditingController();
-    final TextEditingController descController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Add Marker'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: InputDecoration(labelText: 'Title'),
-            ),
-            TextField(
-              controller: descController,
-              decoration: InputDecoration(labelText: 'Description'),
-            ),
-          ]
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
-            child: Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              _addMarker(position, titleController.text, descController.text);
-              Navigator.pop(context);
-            },
-            child: Text('Add'),
-          ),
-        ],
-      ),
-    );
   }
 
   void _showMarkerInfo(MarkerData markerData) {
@@ -214,7 +181,7 @@ class _MapScreenState extends State<MapScreen> {
       _searchController.clear();
     });
 
-    _addMarker(location, "Destination", "Search Result");
+    _addMarker(location, "Dest", _destinationName);
     _getParkingSpots(location);
   }
 
@@ -238,6 +205,25 @@ Future<List<LatLng>> _getRoute(LatLng start, LatLng end) async {
 }
 
 Future<void> _getParkingSpots(LatLng location) async {
+  _parkingSpots = [];
+
+  showDialog(
+    context: context,
+    barrierDismissible: false, // Prevent dismissal by tapping outside
+    builder: (BuildContext context) => AlertDialog(
+      backgroundColor: Colors.white.withOpacity(0.5),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(), // Loading animation
+          SizedBox(height: 15),
+          Text("Finding the best parking spots..."),
+        ],
+      ),
+    )
+  );
+
   final double radius = 500; // Search within 1000 meters
   final url =
       'https://api.openrouteservice.org/pois?api_key=$apiKey';
@@ -254,98 +240,163 @@ Future<void> _getParkingSpots(LatLng location) async {
     "filters": {
       "category_ids": [601], // ORS category ID for parking areas
     },
+    "limit": 10
   });
 
-  print('Request Body: $body');
-  print('Request URL: $url');
-
-
-  final response = await http.post(
-    Uri.parse(url),
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8', 
-      'Authorization': apiKey,
-      'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8'
-    },
-    body: body,
-  );
-
-  print('Response Code: ${response.statusCode}');
-  print('Response Body: ${response.body}');
-
-  if (response.statusCode == 200) {
-    final data = json.decode(response.body);  
-    final List<dynamic> features = data['features'];
-
-    double bestScore = double.infinity; // Start with a very high score for comparison
-    LatLng bestSpotLocation = location;
-    Map<String, dynamic> bestData = {
-      'time': '0',  // Convert to minutes
-      'distance': 0,
-    };;
-
-    // Iterate over features and add markers using your _addMarker function
-    for (var feature in features) {
-      final coords = feature['geometry']['coordinates'];
-      final properties = feature['properties'];
-      final categoryName = properties['category_ids']['601']['category_name'];
-      final parkingSpotLocation = LatLng(coords[1], coords[0]);
-
-      // Call function to calculate distances
-      final distanceFromUserLocation = await _getDistance(_mylocation!, parkingSpotLocation);
-      final distanceFromDestination = await _getDistance(location, parkingSpotLocation);
-
-      // Simulate parking availability probability (replace with dynamic values later)
-      final parkingAvailability = _getParkingAvailabilityProbability();
-
-      // Calculate the route score
-      final routeScore = _calculateRouteScore(
-        distanceFromUserLocation,
-        distanceFromDestination,
-        parkingAvailability,
-        _alpha,
-        _beta,
-        _gamma
-      );
-
-      // Check if this is the best parking spot (lowest score)
-      if (routeScore < bestScore) {
-        bestScore = routeScore;
-        bestSpotLocation = parkingSpotLocation;
-        bestData = { 'distanceFromUserLocation': distanceFromUserLocation, 'distanceFromDestination': distanceFromDestination};
-      }
-
-      // Call your _addMarker function for each feature
-      _addMarker(
-        parkingSpotLocation, // Marker location
-        '',
-        'Travel time: ${distanceFromUserLocation} meters\nDistance: ${distanceFromDestination} meters\nRoute Score: ${routeScore.toStringAsFixed(2)}',
-      );
-    }
-
-    _addMarker(
-      bestSpotLocation, // Marker location
-      'Best',
-      'Travel time: ${bestData['distanceFromUserLocation']} mins\nDistance: ${bestData['distanceFromDestination']} meters\nRoute Score: ${bestScore}',
+  try {
+    final response = await http.post(
+      Uri.parse(url),
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Authorization': apiKey,
+        'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8'
+      },
+      body: body,
     );
-    _startRouteToParkingSpot(bestSpotLocation);
-  } else {
-    throw Exception('Failed to fetch parking spots');
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final List<dynamic> features = data['features'];
+      if (features.isEmpty) _noResultDialog();
+      else {
+        for (var feature in features) {
+          final coords = feature['geometry']['coordinates'];
+
+          int fee_idx = random.nextInt(((100.0 - 50.0) / 5.0).floor() + 1);
+          final parkingSpotLocation = LatLng(coords[1], coords[0]);
+          String placeName = '';
+          if(feature['properties'].containsKey('osm_tags')) placeName = feature['properties']['osm_tags']['name'];
+
+          // Call function to calculate distances
+          final distanceFromUserLocation = await _getDistance(_mylocation!, parkingSpotLocation, 'driving');
+          final distanceFromDestination = await _getDistance(location, parkingSpotLocation, 'walking');
+
+          // Simulate parking availability probability (replace with dynamic values later)
+          final double parkingAvailability = await _getParkingAvailabilityProbability(_spot_id.toString(), distanceFromUserLocation['duration']);
+          _spot_id++;
+
+          _parkingSpots.add({
+            'location': parkingSpotLocation,
+            'data': {
+              'distanceFromUserLocation': distanceFromUserLocation['distance'],
+              'distanceFromDestination': distanceFromDestination['distance'],
+              'parkingFee': 50.0 + fee_idx * 5.0,
+              'trafficDensity': random.nextInt(21),
+              'parkingAvailability': parkingAvailability,
+              'name': placeName
+            }
+          });
+        }
+        // Iterate over features and add markers using your _addMarker function
+        _spot_id = 1;
+        Navigator.of(context).pop();
+        if(_parkingSpots.isNotEmpty) _calculateAndRouteToBestParkingSpot(_parkingSpots);
+      }
+    } else throw Exception('Failed to fetch parking spots');
+  } catch (e) {
+    print('Unhandled Exception: $e');
+    _noResultDialog();
   }
 }
 
-double _getParkingAvailabilityProbability() {
-  // Simulate parking availability, this value should be dynamically calculated or retrieved from a real-time system
-  return 0.75;  // Example value (75% availability)
+void _noResultDialog() {
+  Navigator.of(context).pop();
+  showDialog(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: Text('There is no parking spots within 500m radius around!'),
+    actions: [
+        IconButton(
+          onPressed: () {
+            Navigator.pop(context);
+          },
+          icon: Icon(Icons.close),
+        ),
+      ],
+    ),
+  );
 }
 
-double _calculateRouteScore(double travelTime, double walkingDistance, double parkingAvailability, double alpha, double beta, double gamma) {
+
+Future<void> _calculateAndRouteToBestParkingSpot(List<Map> parkingSpots) async {
+  double bestScore = double.infinity; // Start with a very high score for comparison
+  Map<String, dynamic> bestData = { '': ''};
+
+  for (var parkingSpot in parkingSpots) {
+    final Map<String, dynamic> data = parkingSpot['data'];
+
+    // Calculate the route score
+    final routeScore = _calculateRouteScore(
+      data['distanceFromUserLocation'],
+      data['distanceFromDestination'],
+      data['parkingFee'],
+      data['trafficDensity'],
+      data['parkingAvailability'],
+      _alpha,
+      _beta,
+      _gamma,
+      _delta,
+      _epsilon
+    );
+
+    if (routeScore < bestScore) {
+      bestScore = routeScore;
+      bestData = {
+        'bestScore': routeScore,
+        'bestLocation': parkingSpot['location'],
+        'bestData': data
+      };
+    }
+    // Call your _addMarker function for each feature
+    _addMarker(
+      parkingSpot['location'], // Marker location
+      '',
+      'Name: ${data['name']} \nDriving: ${data['distanceFromUserLocation']} meters\nWalking: ${data['distanceFromDestination']} meters\nParking Fee: ${data['parkingFee']}00 VND\nTraffic Density: ${data['trafficDensity']} cars/500m2\nProbability: ${((data['parkingAvailability']*100).toStringAsFixed(2))}%\nRoute Score: ${routeScore.toStringAsFixed(2)}',
+    );
+  }
+  _addMarker(
+      bestData['bestLocation'], // Marker location
+      'Best',
+      'Name: ${bestData['bestData']['name']} \nDriving: ${bestData['bestData']['distanceFromUserLocation']} meters\nWalking: ${bestData['bestData']['distanceFromDestination']} meters\nParking Fee: ${bestData['bestData']['parkingFee']}00 VND\nTraffic Density: ${bestData['bestData']['trafficDensity']} cars/500m2\nProbability: ${(bestData['bestData']['parkingAvailability']*100).toStringAsFixed(2)}\nRoute Score: ${bestScore.toStringAsFixed(2)}',
+    );
+  _startRouteToParkingSpot(bestData['bestLocation']);
+}
+
+
+
+Future<double> _getParkingAvailabilityProbability(String id, double minutes) async {
+  // return 1.0; use this when api is not running
+  double result = 0.0; // Default fallback value
+  double num_predictions = minutes / 300;
+  int final_predict = num_predictions.ceil();
+  // Use Future.wait and resolve immediately
+  final body = json.encode({
+    "num_predictions": final_predict
+  });
+  final response = await http.post(
+    Uri.parse("api_url/predict/$id"),
+    headers: {"Content-Type": "application/json"},
+    body: body
+  );
+
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    if (data['predictions'] != null && data['predictions'].isNotEmpty) {
+      return 1.0 - data['predictions'][0]['occupancy_rate'];
+    } else {
+      return result;
+    }
+  } else {
+    return result;
+  }
+}
+
+double _calculateRouteScore(double travelTime, double walkingDistance, double parkingFee, double trafficDensity, double parkingAvailability, double alpha, double beta, double gamma, double delta, double epsilon) {
   // Calculate the score based on the provided formula
-  return alpha * travelTime + beta * walkingDistance - gamma * parkingAvailability;
+  return alpha * travelTime + beta * walkingDistance * 10 + gamma * parkingFee * 100 + delta * trafficDensity * 100 - epsilon * parkingAvailability * 1000 ;
 }
 
-Future<dynamic> _getDistance(LatLng start, LatLng destination) async {
-  final String url = 'https://api.openrouteservice.org/v2/directions/foot-walking';
+Future<dynamic> _getDistance(LatLng start, LatLng destination, String vehicle) async {
+  final String url = "https://api.openrouteservice.org/v2/directions/${vehicle == 'walking' ? 'foot-walking' : 'driving-car'}";
   final body = json.encode({
     "coordinates": [
       [start.longitude, start.latitude],
@@ -356,7 +407,7 @@ Future<dynamic> _getDistance(LatLng start, LatLng destination) async {
   final response = await http.post(
     Uri.parse(url),
     headers: {
-      'Content-Type': 'application/json; charset=utf-8', 
+      'Content-Type': 'application/json; charset=utf-8',
       'Authorization': apiKey,
       'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8'
     },
@@ -364,13 +415,10 @@ Future<dynamic> _getDistance(LatLng start, LatLng destination) async {
   );
 
   if (response.statusCode == 200) {
-    print('Response Code: ${response.statusCode}');
-    print('Response Body: ${response.body}');
-
     final data = json.decode(response.body);
     final route = data['routes'][0];  // Assume the first route is the one we want
-    
-    return route['segments'][0]['distance'];  // Distance in meters
+
+    return { 'distance': route['segments'][0]['distance'], 'duration': route['segments'][0]['duration'] };  // Distance in meters
   } else {
     throw Exception('Failed to fetch travel time and distance');
   }
@@ -439,6 +487,63 @@ void _calculateRoute() async {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+       appBar: AppBar(
+      title: const Text("aLot"),
+    ),
+    drawer: Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          // Add a User Profile Header
+          const UserAccountsDrawerHeader(
+            accountName: Text("Thuy Lê"),
+            accountEmail: Text("+84903758706"),
+            currentAccountPicture: CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Icon(
+                Icons.person,
+                size: 50,
+                color: Colors.blue,
+              ),
+            ),
+          ),
+          // Add Sidebar Menu Items
+          ListTile(
+            leading: const Icon(Icons.history),
+            title: const Text("Lịch sử đặt chỗ"),
+            onTap: () {
+              // Add logic for booking history
+              Navigator.pop(context); // Close the drawer
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.favorite),
+            title: const Text("Yêu thích"),
+            onTap: () {
+              // Add logic for favorites
+              Navigator.pop(context);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings),
+            title: const Text("Cài đặt"),
+            onTap: () {
+              // Add logic for settings
+              Navigator.pop(context);
+            },
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text("Đăng xuất"),
+            onTap: () {
+              // Add logic for logout
+              Navigator.pop(context);
+            },
+          ),
+        ],
+      ),
+    ),
       body: Stack(
         children: [
           FlutterMap(
@@ -531,7 +636,7 @@ void _calculateRoute() async {
                                   ),
                                   Row(
                                     children: [
-                                      Text('Parking availability:'),
+                                      Text('Parking fee:'),
                                       Expanded(
                                         child: Slider(
                                           value: _gamma,
@@ -548,22 +653,60 @@ void _calculateRoute() async {
                                       ),
                                     ],
                                   ),
+                                  Row(
+                                    children: [
+                                      Text('Traffic density:'),
+                                      Expanded(
+                                        child: Slider(
+                                          value: _delta,
+                                          min: 0,
+                                          max: 10,
+                                          divisions: 20,
+                                          label: _delta.toStringAsFixed(1),
+                                          onChanged: (double value) {
+                                            setModalState(() {
+                                              _delta = value;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Row(
+                                    children: [
+                                      Text('Parking availability:'),
+                                      Expanded(
+                                        child: Slider(
+                                          value: _epsilon,
+                                          min: 0,
+                                          max: 10,
+                                          divisions: 20,
+                                          label: _epsilon.toStringAsFixed(1),
+                                          onChanged: (double value) {
+                                            setModalState(() {
+                                              _epsilon = value;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                   ElevatedButton(
                                     onPressed: () {
                                       // When the button is pressed, recalculate the best parking spot
                                       _markers.clear();
                                       _routePoints.clear();
-                                      _addMarker(_selectedPosition!, 'Destination', "Search Result");
+                                      _addMarker(_selectedPosition!, 'Dest', _destinationName);
                                       if (_selectedPosition != null) {
                                         // Recalculate best parking spots using the selected position
-                                        _getParkingSpots(_selectedPosition!);
+                                        _calculateAndRouteToBestParkingSpot(_parkingSpots);
                                       } else {
                                         // If no position is selected, show a message or handle it accordingly
                                         ScaffoldMessenger.of(context).showSnackBar(
                                           SnackBar(content: Text('Please select a location first!')),
                                         );
                                       }
-                                      
+
                                       // Close the modal
                                       Navigator.of(context).pop();
                                     },
@@ -635,7 +778,8 @@ void _calculateRoute() async {
                   _routePoints.clear();     // Clear the route line
                   _selectedPosition = null; // Reset selected position
                   _draggedPosition = null;  // Reset dragged position
-                  _isDragging = false;      // Stop dragging mode
+                  _isDragging = false;
+                  _destinationName = '';      // Stop dragging mode
                 });
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('Map cleared!')),
@@ -690,7 +834,7 @@ void _calculateRoute() async {
                       itemCount: _searchResults.length,
                       itemBuilder: (ctx, index) {
                         final place = _searchResults[index];
-                        
+
                         return ListTile(
                           title: Text(
                             place['display_name'],
@@ -698,6 +842,7 @@ void _calculateRoute() async {
                           onTap: () {
                             final lat = double.parse(place['lat']);
                             final lon = double.parse(place['lon']);
+                            _destinationName = place['display_name'];
                             _moveToLocation(lat, lon);
                           },
                         );
@@ -707,34 +852,6 @@ void _calculateRoute() async {
               ],
             ),
           ),
-          // location button
-          // _isDragging == false ? Positioned(
-          //   bottom: 20,
-          //   left: 20,
-          //   child: FloatingActionButton(
-          //     backgroundColor: Colors.indigo,
-          //     foregroundColor: Colors.white,
-          //     onPressed: () {
-          //       setState(() {
-          //         _isDragging = true;
-          //       });
-          //     },
-          //     child: Icon(Icons.add_location),
-          //   ),
-          // ) : Positioned(
-          //   bottom: 20,
-          //   left: 20,
-          //   child: FloatingActionButton(
-          //     backgroundColor: Colors.redAccent,
-          //     foregroundColor: Colors.white,
-          //     onPressed: () {
-          //       setState(() {
-          //         _isDragging = false;
-          //       });
-          //     },
-          //     child: Icon(Icons.wrong_location),
-          //   ),
-          // ),
           Positioned(
             bottom: 20,
             right: 20,
@@ -746,24 +863,6 @@ void _calculateRoute() async {
                   onPressed: _showCurrentLocation,
                   child: Icon(Icons.location_searching_rounded),
                 ),
-                // if(!_isDragging)
-                //   Padding(
-                //     padding: EdgeInsets.only(top: 20),
-                //     child: FloatingActionButton(
-                //       backgroundColor: Colors.green,
-                //       foregroundColor: Colors.white,
-                //       onPressed: () {
-                //         if(_draggedPosition != null) {
-                //           _showMarkerDialog(context, _draggedPosition!);
-                //         }
-                //         setState(() {
-                //           _isDragging = false;
-                //           _draggedPosition = null;
-                //         });
-                //       },
-                //       child: Icon(Icons.check),
-                //     ),
-                //   ),
               ],
             ),
           )
